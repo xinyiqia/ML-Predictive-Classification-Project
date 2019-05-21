@@ -1,0 +1,508 @@
+---
+title: "Applied Data Science:  Midterm Project"
+author: "Zhenhui Jiang,Xinyi Qian,Xinyi Li"
+date: "MAR 10th,2019"
+output:
+  prettydoc::html_pretty:
+  theme: cayman
+highlight: github
+bibliography: bibliography.bibtex
+fontsize: 10pt
+link-citations: yes
+linkcolor: Cerulean
+citecolor: Cerulean
+---
+
+#Introduction:
+
+Nowadays, with the rapid development of technology, a variety of problems can be solved by using machine learning techniques. In this study, the challenge we are facing is regarding an image recognition problem. Our goal is to construct a variety of machine learning models with the goal of generating predictive classification. Specifically, we are trying to identify the types of apparel by using pixel records. There are 60,000 images in training data and 10,000 images in test data, with each 7X7 pixels image representing 1 row/49 observation in the dataset. The outcome variable is ‘label’, which include 10 categories.  The dependent variables are 49 pixels, and each pixel range from 0 to 255. This dataset is balanced, with no missing value. 
+
+The models/techniques that we are using are multinomial logistic, k nearest neighbors, classification tree, random forest, boosting, SVM as well as an ensembling model that take the prediction outcome from 3 models. We report the result based on the following formula:
+		$$Points = 0.25 \times  A + 0.25 \times B + 0.5 \times C$$
+**A**: the size of each training sample, they are **1000**,  **3000** and **6000**.
+
+**B**: running time
+
+**C**: error 
+
+
+```{r setup, include=FALSE}
+set.seed(72)
+knitr::opts_chunk$set(echo = TRUE, comment="", warning = FALSE, message = FALSE, tidy.opts=list(width.cutoff=55))
+```
+
+```{r libraries, echo = FALSE}
+library(DT)
+library(data.table)
+library(DT)
+library(plyr)
+library(dplyr)
+library(nnet)
+library(glmnet)
+```
+
+```{r source_files, echo=FALSE}
+setwd("/Users/zhenhuijiang/Downloads/Graduate/GR5243 APPLIED DATA SCIENCE/mid project/")
+```
+
+```{r functions}
+get_err = function(actual, predicted) {
+  mean(actual != predicted)
+}
+round.numerics <- function(x, digits){
+  if(is.numeric(x)){
+    x <- round(x = x, digits = digits)
+  }
+  return(x)
+}
+```
+
+```{r constants}
+n.values <- c(1000, 3000, 6000)
+iterations <- 3
+label.name="label"
+n.pixel=49
+pixel.name=paste("pixel",1:n.pixel,sep = "")
+```
+
+
+```{r load_data}
+train=read.csv("/Users/zhenhuijiang/Downloads/Graduate/GR5243 APPLIED DATA SCIENCE/mid project/Data/MNIST-fashion training set-49.csv")
+test=read.csv("/Users/zhenhuijiang/Downloads/Graduate/GR5243 APPLIED DATA SCIENCE/mid project/Data/MNIST-fashion testing set-49.csv")
+```
+
+
+```{r generate_samples}
+train.names<- list()
+for (n in n.values){
+  for (iter in 1:iterations){
+    assign(paste("train", n, iter , sep="_"),sample_n(train,n,replace = FALSE))
+    train.names <- cbind(train.names,paste("train", n, iter , sep="_"))
+  }
+}
+train.names <- unlist(train.names)
+summ=list()
+for (name in train.names){
+  summ=cbind(summ,summary(get(name)[,label.name]))
+}
+summ
+```
+
+We have also examined the composition of each sample set to ensure no biased sample used. 
+
+#Models
+
+## Model 1 and 2:  K-Nearest Neighbors
+
+K-Nearest Neighbors is for user to set a neighborhood parameter K. Predictions at each data point are based on the average of the outcomes of the K nearest neighbors. (For classifications, a plurality vote is used.)[@knn1]
+It’s the simplest machine learning model to use, and we want to use this model as a baseline when comparing the results of other models. 
+
+```{r table2, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- " 
+| Variable   | Explaination                                                      |
+|-------------|:-----------------------------------------------------------------:|
+| K           |    K is the number of neighbors considered.                       | 
+"
+cat(tabl)
+```
+
+Knn is a nonparametric model. Knn is easy to interpret. Also, it is robust to the training noise and it will be effective if the data is large.  But the accuracy is low compared to the results from other models. the cross validation tuning process really slow. With too small k, the model would be overfit and with too large k, the model would be underfit, so that we need to find an appropriate k. With increasing dimensions, knn would suffer the curse of dimension. The calculation time and the error may become worse. 
+We first fitted k=3 to see whether it’s appropriate or not then through manually tuning the parameter k (from 10-20), we found that the performance of the model is most optimal when k =16. We also found that as sample size increases (from 1000 to 6000), the model error decreases but the calculation time increases. With our points function, the performances of k=3 and k=16 are similar with each other.  
+
+
+```{r code_model1 knn, eval = TRUE}
+library(class)
+library(FNN)
+knn.model <- function (sample.name,k,test){
+  A = nrow(sample.name)/60000
+  toc <- Sys.time()
+  knn.clas <- knn(train = sample.name[,pixel.name], test = test[,pixel.name], cl = sample.name[,label.name], k = k)
+  tic <- Sys.time()
+  the.time <- as.numeric(x = tic-toc, units = "secs")
+  B = min(the.time/60,1)
+  actual <- test[,label.name]
+  predicted <- knn.clas
+  C = get_err(actual,predicted)
+  res <- data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model1,knn3}
+resofknn3 = data.table()
+for(name in train.names){
+  resofknn3 = rbind(resofknn3,knn.model(sample.name = get(name),test = test,k = 3))
+}
+resofknn3[,model:= "knn3"] 
+```
+
+```{r model2 knn11}
+resofknn11 = data.table()
+for(name in train.names){
+  resofknn11 = rbind(resofknn11,knn.model(sample.name = get(name),test = test,k = 11))
+}
+resofknn11[,model:= "knn11"] 
+```
+
+## Model 3:  Classification Tree
+
+Classification Tree is used to predict a qualitative response. for a classification tree, we predict that each observation belongs to the most commonly occurring class of training observations in the region to which it belongs. 
+
+From the top (the root) of the tree, the best variable is selected. The best categorical split of that variable (into 2 or more branches) is selected. And then we repeat the process, looking for the best predictor and best cutpoint in order to split the data further so as to minimize a criterion such as the Gini index (total variation across the categorical splits) or the entropy. Branching continues until a stopping criterion (e.g. little or no reduction in the Gini index or entropy with further branching) is reached. [@classtree1]
+
+Tree can easily handle multiple predictors and return categorical outcome, easy to interpret and explain to people because we can use rpart.plot to draw graph. Also, this model is highly adaptable to both linear and non-linear relationship. 
+
+But trees tend to overfit the train data (solution : use cross-validation to optimize complexity); predictive accuracy is low (solution:can be improved by aggregating many decision trees such as random forest.)
+
+The overall accuracy of the model is not very high and the model performance does not improve accordingly as the sample size increases.
+
+
+```{r code_model3_desiciontree, eval = TRUE}
+library(rpart)
+library(rpart.plot)
+tree.model <- function (sample.name,test){
+  sample.name[,label.name] <- as.factor(sample.name[,label.name])
+  test[,label.name] <- as.factor(test[,label.name])
+  set.seed(1)
+  A = nrow(sample.name)/60000
+  toc <- Sys.time()
+  tree <- rpart(label~.,data = sample.name,method = "class")
+  pred.tree = predict(tree,newdata = test,type = 'class')
+  tic <- Sys.time()
+  the.time <- as.numeric(x = tic-toc, units = "secs")
+  B = min(the.time/60,1)
+  C = get_err(pred.tree,test$label)
+  res <- data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model3 decisiontree}
+
+resofdt = data.table()
+for(name in train.names){
+  resofdt = rbind(resofdt,tree.model(sample.name = get(name),test))
+}
+resofdt[,model:= "decision tree"] 
+```
+
+## Model 4 :  Random Forest 
+
+It involves growing multiple trees by using bootstrapped samples (bootstrapped process : resampling with replacement) and averaging the prediction to get a better result. When each Bootstrap sample is fit to a tree, only a randomly selected subset of all of the predictor variables is used. No other variables may be applied. Therefore, the resulting trees are less correlated compared when using bagging.[@rf1]
+
+Random forest can be used in both regression and classification. Model performance is significantly improved compared to what basic tree or other model generated. Also, it reduce the possibility of overfitting.  However, random forest contains a large number of trees, so it may cause the algorithm slow. We need more trees to improve the accuracy, and it will lead to more time consuming. 
+
+```{r table123, echo=FALSE, message=FALSE, warnings=FALSE, results='asis'}
+tabl <- " 
+| Variables        | Explaination                                                        |
+|------------------|:------------------------------------------------------------------:|
+| N_estimators     |the number of trees in the forest.                                  | 
+| Max_depth        |represent the depth of trees in forest.                             |
+| Min_samples_leaf |minimum number of samples required to be at a leaf node             |
+| Max_features     |the number of features to consider when looking for the best split. |
+
+"
+cat(tabl)
+```
+
+```{r code_model4 and 5, eval = TRUE}
+library(randomForest)
+library(caret)
+forest.model <- function (sample.name,test,number_of_tree=500){
+  set.seed(1)
+  A = nrow(sample.name)/60000
+  toc <- Sys.time()
+  forest = randomForest(label~., data = sample.name, n.tree=number_of_tree)
+  pred.forest = predict(forest, newdata = test)
+  tic <- Sys.time()
+  the.time <- as.numeric(x = tic-toc, units = "secs")
+  B = min(the.time/60,1)
+  
+  C = get_err(pred.forest,test[,label.name])
+  res <- data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model4 rf500 }
+resofrf500 = data.table()
+for(name in train.names){
+  resofrf500 = rbind(resofrf500,forest.model(get(name),test))
+}
+resofrf500[,model:= "random forest with 500 trees"] 
+```
+
+
+
+
+
+## Model 5 and 6 Boosting
+
+Boosting is a type of ensembling technique. We combine several weak classifiers together and weight the results. The algorithm is that we build a weak classifier at first then weight all samples to let the previous classifier be random. Then we fit another classifier again and do iteration. We tried the shrinkage rate with 0.01 and 0.00001 where 0.01 is more suitable and 0.00001 obviously doesn’t achieve the local minimum for loss function. 
+
+This model usually has better predictive performance and parameters can be tuned with cross validation method.   
+
+There're several parameters in the function: 
+
+Distribution: some options such as "gaussian" for linear regression, “bernoulli” for logistic regression with 0-1 outcomes, "multinomial" for multi-classification.
+
+N.trees: Integer specifying the total number of trees to fit.
+Interaction.depth: Integer specifying the maximum depth of each tree. A value of 1 implies an additive model, a value of 2 implies a model with up to 2-way interactions, etc. Default is 1.
+
+N.minobsinnode: Integer specifying the minimum number of observations in the terminal nodes of the trees. 
+
+Shrinkage: a shrinkage parameter applied to each tree in the expansion. Also known as the learning rate or step-size reduction. Default is 0.1. The usual range is from 0.001 to 0.1.
+
+We picked boosting model due to its relatively higher model performance. However, it also comes with greater computational complexity due to the bootstrapping involved. Also, the tuning process was really slow and Rstudio crashed occasionally during the tuning process.  
+
+We have also discovered that the change of sample size do not affect the boosting model performance. 	
+
+```{r load_model5and6, eval = TRUE}
+library(gbm)
+library(e1071)
+gbmfunc <- function(sample.name,test,n_of_tree=500,interaction_depth=1,shrinkage_rate=0.01,n_minobsinnode=5){
+  A = nrow(sample.name)/60000
+  toc <- Sys.time()
+  boostCV=gbm(label~.,sample.name,distribution="multinomial",
+            n.trees=n_of_tree,
+            interaction.depth=interaction_depth,
+            shrinkage=shrinkage_rate,
+            n.minobsinnode=n_minobsinnode)
+  predBoost=predict(boostCV,test,n.trees=150, type = "response")
+  predBoost2 <- apply(predBoost, 1, which.max)
+  tic <- Sys.time()
+  the.time <- as.numeric(x = tic-toc, units = "secs")
+  B = min(the.time/60,1)
+  library(plyr)
+  predBoost3 = mapvalues(predBoost2, from=c(1:10), to=colnames(predBoost))
+  C = mean(predBoost3 != test$label)
+  res <- data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model5 gbmwith0.01rate}
+resofgbm = data.table()
+for(name in train.names){
+  resofgbm = rbind(resofgbm,gbmfunc(get(name),test))
+}
+resofgbm[,model:= "gbm with 0.01 learning rate"] 
+```
+
+```{r model6 gbmwith0.00001rate}
+resofgbm_small_rate = data.table()
+for(name in train.names){
+  resofgbm_small_rate = rbind(resofgbm_small_rate,gbmfunc(get(name),test,shrinkage_rate = 0.00001))
+}
+resofgbm_small_rate[,model:= "gbm with 0.00001 learning rate"]
+```
+
+## Model 7 Multinomial Logistic Regression
+
+Logistic regression is used to predict categorical placement in or the probability of category membership on a dependent variable based on multiple independent variables[@logistic]. And multinomial logistic regression is a logistic regression that to predict more than 2 categories. We choose multinomial logistic is because it does not assume normality, linearity, homoscedasticity, or assumption of independence among the dependent variable choices. 
+	
+$$log[\frac{P(Y=1|X)}{P(Y=0|X)} = \beta_0 + \beta_1 X_1 + \beta_2X_2+ ...+ \beta_n X_n  ]$$
+
+We use the multinom function from nnet package to estimate our multinomial logistic regression model. Sample size: Based on the result and we know that multinomial regression uses a maximum likelihood estimation method, it means that the larger the sample size, the better the accuracy. Logistic regression is generally resistant to overfitting because it only has n+1 parameter(n is the number of variables). Logistic regression is very simple and reliable. However, we cannot solve non-linear problem by multinomial logistic regression. Logistic model performs better when the noise is low. 
+
+
+
+
+```{r code_model7_glm, eval = TRUE}
+get.multinom = function(trn,tst){
+  A=nrow(trn)/60000
+  begin = Sys.time()
+  glm_mod_1 =  multinom(trn$label ~., data =trn, trace = FALSE)
+  pred=predict(glm_mod_1,tst[,-1])
+  end = Sys.time()
+  the.time = as.numeric(x = end-begin, units = "secs")
+  B = min(the.time/60,1)
+  C =get_err(tst$label, pred)
+  res=data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model7}
+resofglm = data.table()
+for(name in train.names){
+  resofglm = rbind(resofglm,get.multinom(get(name),test))
+}
+resofglm[,model:= "glm"]
+```
+
+## Model 8 Support Vector Machine
+
+Support Vector machines is a data classification methods try to separate data by hyperlanes with maximum distance.  SVM is easy and powerful, especially for data with unknown distribution. There are two parameter that we could tune in SVM. The gamma has to be tuned in order to better fit the hyperplane to data. When gamma increase, the hyperplane will be more curvy and decrease the bias to fit model. It might leads to overfitting. Another parameter to be tuned is cost. It is used for the size of ‘soft margin’ of SVM. If the cost is smaller, the soft margin will become greater. Also, we could choose different kernels for models in different situation. SVM is adaptable for different dataset.
+
+SVM performs very well even when noise and biased train data exist because it separate the data with maximum margin. SVM should be highly resistant to overfitting. Incresearing the training might not help improve SVM. SVM can perform well in small data set. 
+
+
+
+```{r code_model8and9svm, eval = TRUE}
+get.svm = function(trn,tst,ker="radial"){
+  A=nrow(trn)/60000
+  begin = Sys.time()
+  svm.mod = svm(x = trn[,pixel.name], y = trn[,label.name], kernel =ker)
+  pred = predict(svm.mod, tst[,pixel.name])
+  end = Sys.time()
+  the.time = as.numeric(x = end-begin, units = "secs")
+  B=min(1,the.time/60)
+  C =get_err(tst[,label.name], pred)
+  res=data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r model8 svm with radical kernal}
+resofsvm_rad = data.table()
+for(name in train.names){
+  resofsvm_rad = rbind(resofsvm_rad,get.svm(get(name),test))
+}
+resofsvm_rad[,model:= "svm"]
+```
+
+## Model 9 XGBoost
+
+xgboost is a special type of boosting techniques with improved numerical methods to achieve the local minimum in loss function. 
+
+```{r xgboost}
+library(xgboost)
+xgb<- function(trn,test){
+  require(plyr)
+  require(dplyr)
+  A=nrow(trn)/60000
+  scale(trn[,-1])
+  library(dplyr)
+  levels(trn$label) = 0:9
+  labels <- trn$label
+  levels(test$label) = 0:9
+  ts_label <- test$label
+  new_tr <- model.matrix(~.+0,data = trn[,-1]) 
+  new_ts <- model.matrix(~.+0,data = test[,-1])
+  labels <- as.numeric(labels)-1
+  ts_label <- as.numeric(ts_label)-1
+  dtrain <- xgb.DMatrix(data = new_tr,label = labels) 
+  dtest <- xgb.DMatrix(data = new_ts,label=ts_label)
+  params <- list(booster = "gbtree", objective = "multi:softprob", num_class = 10, eval_metric = "mlogloss")
+  begin = Sys.time()
+  xgbcv <- xgb.cv(params = params, data = dtrain, nrounds = 50, nfold = 5, showsd = FALSE, stratified = FALSE, print_every_n = 10, early_stop_round = 20, maximize = FALSE, prediction = TRUE,verbose = FALSE)
+  xgb_train_preds <- data.frame(xgbcv$pred) %>% mutate(max = max.col(., ties.method = "last"), label = labels + 1)
+  end = Sys.time()
+  the.time = as.numeric(x = end-begin, units = "secs")
+  B=min(1,the.time/60)
+  C =get_err(labels+1, pred= xgb_train_preds$max)
+  res=data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r xgbrun}
+require(xgboost)
+require(dplyr)
+resofxgb = data.table()
+for(name in train.names){
+  resofxgb = rbind(resofxgb,xgb(get(name),test))
+}
+resofxgb[,model:= "xgb"]
+```
+
+## Model 10 Ensemble
+
+In order to generate an ensembling model that best demonstrate our model performance, we have selected the 3 models: support vector machine (svm),random forest(randomforest) and generalized linear model (glm). Since we are trying to solve a classification problem and the prediction results are categorical outcomes instead of numerical values. We decided to assign the result of random forest to ensemble model. Then if the prediction of svm and glm is same, we assign the prediction of svm and glm to ensemble. In conclusion, we were able to minimize our error rate to 0.16 with 6000 sample size with the ensembling model. The performance is better than that of any other model. 
+
+Since we generated all of our models by using created function, we could not refer to the predicted outcome directly in the ensemble model. Also, the running time of ensembling model is very fast (nearly 0 secs)  since it only includes vector calculation. 
+
+```{r load_model10}
+ensemble <- function(trn,test){
+  A=nrow(trn)/60000
+  forest = randomForest(label~., data = trn, n.tree=500)
+  pred.forest = predict(forest, newdata = test)
+  svm.mod = svm(x = trn[,pixel.name], y = trn[,label.name])
+  pred.svm = predict(svm.mod, test[,pixel.name])
+  glm_mod_1 =  multinom(trn$label ~., data =trn, trace = FALSE)
+  pred.glm=predict(glm_mod_1,test[,-1])
+  begin = Sys.time()
+  pred.ensemble <- pred.forest
+  w <- which(pred.svm == pred.glm)
+  if(length(w) > 0){
+    pred.ensemble[w] <- pred.svm[w]
+  }
+  end = Sys.time()
+  the.time = as.numeric(x = end-begin, units = "secs")
+  B=min(1,the.time/60)
+  C =get_err(test[,label.name], pred.ensemble)
+  res=data.frame(A,B,C)
+  return(round(res,digits = 4))
+}
+```
+
+```{r load model10}
+resofens = data.table()
+for(name in train.names){
+  resofens = rbind(resofens,ensemble(get(name),test))
+}
+resofens[,model:= "ensemble"]
+```
+
+## Scoreboard
+
+After running all the models selected from above, we reported an overall scoreboard of all models to all data sets and the average results for the 30 combinations of Model and Sample Size as below.
+
+We've created three points rules.One has more penalty to time, the other one has more penalty to error and the last one has more penalty to sample size. We'd like to compare the performances of the models under different points function. 
+
+```{r scoreboard}
+res<-list(resofknn11,resofknn3,resofdt,resofgbm,resofgbm_small_rate,resofglm,resofrf500,resofxgb,resofsvm_rad,resofens)
+res=data.frame(do.call(rbind,res))
+A.name="A"
+B.name="B"
+C.name="C"
+models.name="model"
+Points=0.25*res[A.name]+0.25*res[B.name]+0.50*res[C.name]
+more_err_points=0.1*res[A.name]+0.1*res[B.name]+0.8*res[C.name]
+more_time_points=0.1*res[A.name]+0.8*res[B.name]+0.1*res[C.name]
+more_size_points=0.8*res[A.name]+0.1*res[B.name]+0.1*res[C.name]
+names(more_time_points)="moretimepoint"
+names(more_size_points)="moresizepoint"
+names(more_err_points)="moreerrpoint"
+names(Points)="point"
+res=do.call(cbind,list(res,Points,more_time_points,more_err_points,more_size_points))
+size=rep(c(rep(n.values[1],3),rep(n.values[2],3),rep(n.values[3],3)),10)
+names(size)="size"
+size.name="size"
+res=cbind(size,res)
+res=data.table(res)
+res.comb=res[,.("A"=mean(A),"B"=mean(B),"C"=mean(C),"points"=mean(point)),by=c(models.name,size.name)]
+res.comb=res.comb[order(points)]
+res.comb.moreweight=res[,.("A"=mean(A),"B"=mean(B),"C"=mean(C),"points"=mean(point),"more_err_point"=mean(moreerrpoint),"more_time_point"=mean(moretimepoint),"more_size_point"=mean(moresizepoint)),by=c(models.name,size.name)]
+res=res[, lapply(X = .SD, FUN = "round.numerics",
+    digits = 4)]
+res.comb=res.comb[, lapply(X = .SD, FUN = "round.numerics",
+    digits = 4)]
+res.comb.moreweight=res.comb.moreweight[, lapply(X = .SD, FUN = "round.numerics",
+    digits = 4)]
+DT::datatable(res)
+DT::datatable(res.comb)
+```
+
+more_error_points= $$0.8\times error+0.1\times time+0.1\times size$$
+
+more_time_points= $$0.1\times error+0.8\times time+0.1\times size$$
+
+more_size_points= $$0.1\times error+0.1\times time+0.8\times size$$
+
+```{r restable}
+DT::datatable(res.comb.moreweight)
+```
+
+
+# Discussion
+
+Overall, as we can see from the scoreboard, the ensembling model has the best performance with lowest points and running time. (almost 0 seconds). The result is due to the fact that the majority of work has been done in the previous sections such as finding the optimal parameter and computational time being calculated already. Therefore, ensembling model could be a very good technique to leverage the performance of previous built model in competitions.
+
+Besides the ensemble model, with the given points function, the model with middle sample size (3000) usually has better performance. However, the overall points do not decrease significantly since it takes more time to run the model with the increase of sample size from size 3000. Overall, our support vector machine model (with sample size of 3000) has the lowest points and best performance. If we change weight to $0.8\times error+0.1\times time+0.1\times size$, svm model with sample size of 6000 has the best performance with lowest points, following with svm model with sample size of 3000. If we change weight to $0.1\times error+0.8\times time+0.1\times size$, our svm model with sample size of 1000 is the winner, following with classification decision tree with sample size of 1000. If we change weight to $0.1\times error+0.1\times time+0.8\times size$ , our svm model with sample size of 1000 is the winner, the following is random forest with sample size of 1000. From the analysis above, we have learned that the performance of random forest model  does not necessarily increase with a bigger sample size. Also, the support vector machine model performs well consistently regardless of sample size.
+
+
+# References
+
+
